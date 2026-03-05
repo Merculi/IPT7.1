@@ -2,8 +2,11 @@
 import { ref, reactive } from 'vue'
 
 // --- APP ZUSTAND ---
-const currentView = ref('register') // Wechselt zwischen 'register', 'login' und 'products'
+const currentView = ref('login') // Startansicht ist Login
 const products = ref([])
+const errorMessage = ref('')
+const successMessage = ref('')
+
 const API_BASE = "https://ipt71.kuno-schuerch.bbzwinf.ch"
 
 // --- DATEN MODELLE ---
@@ -20,24 +23,26 @@ const loginForm = reactive({
   password: ''
 })
 
-// --- LOGIK & VALIDIERUNG ---
-
-// Validierung vor dem Absenden (Anforderung PDF Seite 1)
-function isFormValid() {
-  if (!regForm.username.includes('@')) {
-    alert("Benutzername muss eine gültige E-Mail Adresse sein.")
-    return false
-  }
-  if (regForm.password.length < 4) {
-    alert("Kennwort ist zu kurz.")
-    return false
-  }
-  return true
+// --- HILFSFUNKTIONEN ---
+function clearMessages() {
+  errorMessage.value = ''
+  successMessage.value = ''
 }
 
 // 1. REGISTRIERUNG
 async function handleRegister() {
-  if (!isFormValid()) return
+  clearMessages()
+
+  // Frontend-Validierung
+  if (!regForm.username.includes('@')) {
+    errorMessage.value = "Bitte eine gültige E-Mail-Adresse eingeben."
+    return
+  }
+
+  if (regForm.password.length < 6) {
+    errorMessage.value = "Das Kennwort muss mindestens 6 Zeichen lang sein."
+    return
+  }
 
   try {
     const response = await fetch(`${API_BASE}/user/register`, {
@@ -47,18 +52,30 @@ async function handleRegister() {
     })
 
     if (response.ok) {
-      alert("Registrierung erfolgreich! Bitte melden Sie sich an.")
+      successMessage.value = "Registrierung erfolgreich! Bitte logge dich ein."
       currentView.value = 'login'
+
+      Object.assign(regForm, {
+        username: '',
+        firstname: '',
+        lastname: '',
+        password: '',
+        language: 'de'
+      })
+
     } else {
-      alert("Fehler bei der Registrierung. Eventuell existiert der Benutzer schon.")
+      errorMessage.value = "Fehler bei der Registrierung. Benutzer existiert evtl. bereits."
     }
+
   } catch (error) {
-    alert("Backend nicht erreichbar.")
+    errorMessage.value = "Netzwerkfehler: Backend nicht erreichbar."
   }
 }
 
 // 2. LOGIN
 async function handleLogin() {
+  clearMessages()
+
   try {
     const response = await fetch(`${API_BASE}/user/login`, {
       method: 'POST',
@@ -67,180 +84,71 @@ async function handleLogin() {
     })
 
     if (response.ok) {
-      // Wenn Login erfolgreich, lade Produkte und wechsle Ansicht
+      const data = await response.json()
+
+      if (data && data.token) {
+        localStorage.setItem('auth_token', data.token)
+      } else {
+        localStorage.setItem('auth_token', 'dummy-token')
+      }
+
+      loginForm.password = ''
+
       await fetchProducts()
+
       currentView.value = 'products'
+
     } else {
-      alert("Anmeldung fehlgeschlagen. Passwort oder E-Mail falsch.")
+      errorMessage.value = "Anmeldung fehlgeschlagen. E-Mail oder Passwort falsch."
     }
+
   } catch (error) {
-    alert("Login-Fehler.")
+    errorMessage.value = "Login-Fehler. Backend nicht erreichbar."
   }
 }
 
 // 3. PRODUKTE LADEN
 async function fetchProducts() {
+  clearMessages()
+
   try {
-    const response = await fetch(`${API_BASE}/product/list`)
-    if (response.ok) {
-      products.value = await response.json()
+    const token = localStorage.getItem('auth_token')
+
+    const headers = { 'Content-Type': 'application/json' }
+
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`
     }
+
+    const response = await fetch(`${API_BASE}/product/list`, {
+      method: 'GET',
+      headers: headers
+    })
+
+    if (response.ok) {
+      const data = await response.json()
+
+      products.value = Array.isArray(data)
+          ? data
+          : (data.products || data.data || [])
+
+    } else {
+      errorMessage.value = "Fehler beim Laden der Produkte."
+    }
+
   } catch (error) {
-    console.error("Produkte konnten nicht geladen werden.")
+    errorMessage.value = "Produkte konnten nicht geladen werden. Backend erreichbar?"
   }
 }
 
-// 4. LOGOUT (Anforderung PDF Seite 1)
+// 4. LOGOUT
 function handleLogout() {
+  clearMessages()
+
+  localStorage.removeItem('auth_token')
+
+  products.value = []
+
   currentView.value = 'login'
-  // Passwörter leeren aus Sicherheitsgründen
-  regForm.password = ''
-  loginForm.password = ''
 }
 </script>
-
-<template>
-  <div class="app-container">
-
-    <!-- ANSICHT: REGISTRATION -->
-    <div v-if="currentView === 'register'" class="card">
-      <h2>beSmart - Registrierung</h2>
-      <form @submit.prevent="handleRegister">
-        <input v-model="regForm.username" type="email" placeholder="Benutzername (E-Mail)" required>
-        <input v-model="regForm.firstname" type="text" placeholder="Vorname" required>
-        <input v-model="regForm.lastname" type="text" placeholder="Nachname" required>
-        <input v-model="regForm.password" type="password" placeholder="Kennwort" required>
-
-        <label>Gewünschte Sprache:</label>
-        <select v-model="regForm.language">
-          <option value="de">Deutsch</option>
-          <option value="en">Englisch</option>
-          <option value="fr">Französisch</option>
-        </select>
-
-        <button type="submit" class="primary-btn">Registrieren</button>
-      </form>
-      <p @click="currentView = 'login'" class="switch-link">Bereits registriert? Zum Login</p>
-    </div>
-
-    <!-- ANSICHT: LOGIN -->
-    <div v-else-if="currentView === 'login'" class="card">
-      <h2>beSmart - Anmeldung</h2>
-      <form @submit.prevent="handleLogin">
-        <input v-model="loginForm.username" type="email" placeholder="E-Mail" required>
-        <input v-model="loginForm.password" type="password" placeholder="Kennwort" required>
-        <button type="submit" class="primary-btn">Einloggen</button>
-      </form>
-      <p @click="currentView = 'register'" class="switch-link">Noch kein Konto? Hier registrieren</p>
-    </div>
-
-    <!-- ANSICHT: PRODUKTSEITE -->
-    <div v-else-if="currentView === 'products'" class="product-page">
-      <header class="header">
-        <h1>Unsere Produkte</h1>
-        <button @click="handleLogout" class="logout-btn">Abmelden</button>
-      </header>
-
-      <div class="product-grid">
-        <div v-for="p in products" :key="p.id" class="product-card">
-          <h3>{{ p.name }}</h3>
-          <p>Produkt-ID: {{ p.id }}</p>
-        </div>
-      </div>
-    </div>
-
-  </div>
-</template>
-
-<style scoped>
-/* Modernes & Responsives Design (Anforderung Seite 1) */
-.app-container {
-  font-family: 'Inter', sans-serif;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 100vh;
-  background-color: #f5f7fa;
-  padding: 20px;
-}
-
-.card {
-  background: white;
-  padding: 30px;
-  border-radius: 10px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-  width: 100%;
-  max-width: 400px;
-}
-
-h2 { text-align: center; color: #2c3e50; }
-
-input, select {
-  width: 100%;
-  padding: 12px;
-  margin: 10px 0;
-  border: 1px solid #ddd;
-  border-radius: 5px;
-  box-sizing: border-box;
-}
-
-.primary-btn {
-  width: 100%;
-  padding: 12px;
-  background-color: #42b983;
-  color: white;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-weight: bold;
-}
-
-.primary-btn:hover { background-color: #3aa876; }
-
-.switch-link {
-  text-align: center;
-  color: #3498db;
-  cursor: pointer;
-  margin-top: 15px;
-  text-decoration: underline;
-}
-
-/* Produktseite Styles */
-.product-page { width: 100%; max-width: 900px; }
-
-.header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 30px;
-}
-
-.logout-btn {
-  background-color: #e74c3c;
-  color: white;
-  border: none;
-  padding: 10px 20px;
-  border-radius: 5px;
-  cursor: pointer;
-}
-
-.product-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 20px;
-}
-
-.product-card {
-  background: white;
-  padding: 20px;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-  border-top: 4px solid #42b983;
-}
-
-/* Responsivität */
-@media (max-width: 600px) {
-  .header { flex-direction: column; gap: 10px; }
-  .product-grid { grid-template-columns: 1fr; }
-}
-</style>
